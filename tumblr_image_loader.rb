@@ -165,6 +165,7 @@ class TumblrImageLoader
   # run
   #
   def run
+    start_tm = Time.now
     first_id = nil
     offset = 0
     dounload_count = 0
@@ -216,6 +217,7 @@ class TumblrImageLoader
     if  dounload_count > 0
       msg += ", #{dounload_count} files downloaded"
     end
+    msg += ", exec: #{Time.now - start_tm} [sec]"
     puts msg
   end
 end
