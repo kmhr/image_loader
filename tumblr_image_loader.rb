@@ -14,9 +14,10 @@ require 'pp'
 
 class TumblrImageLoader
   DASHBOARD_LIMIT = 50
-  MAX_LOAD_IMAGE_NUM = 500
+  MAX_OFFSET_NUM = 10000
   READ_TIMEOUT = 10
-  CHECK_DAYS = 7
+  FILENAME_CACHE_SIZE = 5000
+  FILENAME_CACHE_FILE = '/var/tmp/_til_fname.cache'
 
   attr_accessor :conf
 
@@ -41,9 +42,10 @@ class TumblrImageLoader
           'image_dir' => IMAGE_DIR,
           'post_id' => '0',
           'dashboard_limit' => DASHBOARD_LIMIT,
-          'max_load_image_num' => MAX_LOAD_IMAGE_NUM,
+          'max_offset_num' => MAX_OFFSET_NUM,
           'read_timeout' => READ_TIMEOUT,
-          'check_days' => CHECK_DAYS,
+          'filename_cache_size' => FILENAME_CACHE_SIZE,
+          'filename_cache_file' => FILENAME_CACHE_FILE,
         }
       }
       @conf_path = CONF_PATH
@@ -75,9 +77,10 @@ class TumblrImageLoader
     #      image_dir: /hoge/fuga
     #      post_id: 0
     #      dashboard_limit: 50
-    #      max_load_image_num: 500
+    #      max_offset_num: 10000
     #      read_timeout: 10
-    #      check_days: 7
+    #      filename_cache_size: 5000
+    #      filename_cache_file: /var/tmp/_til_fname.cache
     #   ------------------------------
     #
     #   see -> https://github.com/tumblr/tumblr_client
@@ -116,26 +119,25 @@ class TumblrImageLoader
       end
     end
     @tc = Tumblr::Client.new
+
+    @filename_cache = []
+    if File.exist?(@conf.data['filename_cache_file'])
+      db = YAML::Store.new(@conf.data['filename_cache_file'])
+      db.transaction do
+        @filename_cache = db['root']
+      end
+    end
   end
 
   #
   # check file name
   #
   def samefile?(url)
-    today = DateTime.now
-    dir = @conf.data['image_dir']
-    fname = File.basename(url)
-
-    result = false
-    (0 ... @conf.data['check_days']).each do |i|
-      file_path = "#{dir}/#{(today - i).strftime('%Y%m%d')}/#{fname}"
-      if File.exist?(file_path)
-        result = true
-        puts "> skip #{file_path}"
-        break
-      end
+    if @filename_cache.include?(File.basename(url))
+      puts "> skip #{url}"
+      return true
     end
-    result
+    false
   end
 
   #
@@ -154,6 +156,7 @@ class TumblrImageLoader
         end
       end
       puts "> #{file_path}"
+      @filename_cache.push(File.basename(url))
     rescue Exception => e
       puts ">> #{e}"
       result = false
@@ -176,6 +179,10 @@ class TumblrImageLoader
       break if dashboard.nil? || dashboard['posts'].nil? || dashboard['posts'].size == 0
       offset += dashboard['posts'].size
 
+      if offset > @conf.data['max_offset_num'].to_i
+        break
+      end
+
       dashboard['posts'].each do |data|
         name = data['blog_name']
         id = data['id']
@@ -193,16 +200,10 @@ class TumblrImageLoader
             unless samefile?(url)
               if download(url)
                 dounload_count += 1
-                if dounload_count >= @conf.data['max_load_image_num']
-                  loop_enable = false
-                  break
-                end
               end
             end
           end
         end
-
-        break if loop_enable == false
       end
 
       break if dashboard['posts'].size < @conf.data['dashboard_limit']
@@ -219,6 +220,18 @@ class TumblrImageLoader
     end
     msg += ", exec: #{Time.now - start_tm} [sec]"
     puts msg
+
+    @filename_cache.uniq!
+    n = @filename_cache.size - @conf.data['filename_cache_size'].to_i
+    if n > 0
+      (0 ... n).each do
+        @filename_cache.shift
+      end
+    end
+    db = YAML::Store.new(@conf.data['filename_cache_file'])
+    db.transaction do
+      db['root'] = @filename_cache
+    end
   end
 end
 
